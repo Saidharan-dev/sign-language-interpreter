@@ -1,4 +1,4 @@
-import { GestureSmoother, HandPose, recognizeGesture } from '@/utils/gestureRecognizer';
+import { GestureSmoother } from '@/utils/gestureRecognizer';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';

@@ -1,7 +1,7 @@
-import { GestureSmoother } from '@/utils/gestureRecognizer';
+import { GestureSmoother, recognizeGesture, type HandLandmark, type HandPose } from '@/utils/gestureRecognizer';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 export const CameraComponent = () => {
   const [permission, requestPermission] = useCameraPermissions();
@@ -9,18 +9,21 @@ export const CameraComponent = () => {
   const [detectedGesture, setDetectedGesture] = useState<string>('');
   const [gestureDescription, setGestureDescription] = useState<string>('');
   const [fps, setFps] = useState<number>(22);
+  const [handDetected, setHandDetected] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('Place your hand in the detection area');
+  const [gestureConfidence, setGestureConfidence] = useState<number>(0);
   
-  const smootherRef = useRef(new GestureSmoother());
   const frameCountRef = useRef(0);
   const startTimeRef = useRef(Date.now());
-  const lastRecognitionRef = useRef<string>('');
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gestureSmoother = useRef(new GestureSmoother());
+  const detectionFrameCountRef = useRef(0);
 
   // Gesture history for display
   const [gestureHistory, setGestureHistory] = useState<string[]>([]);
 
-  // Demo gesture sequence
-  const demoGestures = ['HI', 'PEACE', 'LOVE_YOU', 'THANK_YOU', 'THUMBS_UP', 'HELP', 'FOOD', 'EAT', 'FIST'];
-  const demoDescriptions: Record<string, string> = {
+  // Gesture descriptions for reference
+  const gestureDescriptions: Record<string, string> = {
     HI: 'Waving hello with all fingers extended',
     PEACE: 'Peace sign with index and middle finger',
     LOVE_YOU: 'I Love You gesture (ILY sign)',
@@ -50,40 +53,131 @@ export const CameraComponent = () => {
     }
   }, [permission?.granted, requestPermission]);
 
-  // Simulate gesture detection
+  // Handle manual gesture detection when user signals
+  const handleGestureDetection = () => {
+    if (!isModelLoaded) return;
+
+    // Simulate hand detection by creating mock hand pose
+    // In a real implementation, this would analyze actual video frames
+    const mockHandPose = generateMockHandPose();
+    
+    // Use actual gesture recognition
+    const result = recognizeGesture(mockHandPose);
+    
+    if (result) {
+      setDetectedGesture(result.gesture);
+      setGestureDescription(result.description);
+      setGestureConfidence(result.confidence);
+      setStatusMessage(`Gesture Detected: ${result.gesture} (${(result.confidence * 100).toFixed(0)}%)`);
+      
+      // Add to history
+      setGestureHistory(prev => [result.gesture, ...prev.slice(0, 4)]);
+    }
+    
+    setHandDetected(false);
+    
+    // Clear previous timeout if exists
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    
+    // Auto-clear after 3 seconds
+    timeoutRef.current = setTimeout(() => {
+      setDetectedGesture('');
+      setGestureDescription('');
+      setGestureConfidence(0);
+      setStatusMessage('Place your hand in the detection area');
+    }, 3000);
+  };
+
+  // Generate mock hand pose data
+  // In production, this would be real landmark data from camera
+  const generateMockHandPose = (): HandPose => {
+    // This creates varying hand poses to simulate different gestures
+    // Each gesture type has different landmark patterns
+    const detectionFrames = detectionFrameCountRef.current;
+    
+    // Create base landmarks for open hand (HI gesture)
+    const landmarks: HandLandmark[] = [];
+    
+    // Generate 21 landmarks (standard hand model)
+    for (let i = 0; i < 21; i++) {
+      let x = 0.5 + Math.random() * 0.3 - 0.15; // Center with variation
+      let y = 0.5 + Math.random() * 0.3 - 0.15;
+      
+      // Vary landmarks based on frame to simulate different gestures
+      const variance = (detectionFrames % 30) / 30; // Cycle through 30 frames
+      
+      // Adjust specific landmarks to create different gestures
+      if (i >= 4 && i <= 20) {
+        // Finger tips - extend them more based on variance
+        const fingerIndex = i - 4;
+        y = 0.3 + variance * 0.4; // Tips extend more
+      }
+      
+      landmarks.push({
+        x: Math.min(1, Math.max(0, x)),
+        y: Math.min(1, Math.max(0, y)),
+        z: 0.5,
+        visibility: 0.95,
+      });
+    }
+    
+    // Randomize slightly to simulate different hand positions
+    if (detectionFrames % 15 < 5) {
+      // FIST - keep fingers close
+      for (let i = 4; i <= 20; i++) {
+        landmarks[i].y += 0.3;
+      }
+    } else if (detectionFrames % 15 < 10) {
+      // PEACE - extend only 2 fingers
+      for (let i = 4; i <= 20; i++) {
+        if (i !== 8 && i !== 12) { // Keep index and middle extended
+          landmarks[i].y += 0.3;
+        } else {
+          landmarks[i].y -= 0.2; // Extend these two
+        }
+      }
+    } else {
+      // HI - all fingers extended
+      for (let i = 4; i <= 20; i++) {
+        landmarks[i].y -= 0.2; // All extend upward
+      }
+    }
+    
+    return {
+      landmarks,
+      handedness: 'Right',
+    };
+  };
+
+  // FPS counter update
   useEffect(() => {
     if (!isModelLoaded) return;
 
-    const interval = setInterval(() => {
+    const fpsInterval = setInterval(() => {
       frameCountRef.current += 1;
-
-      // Simulate detecting a gesture every 3-4 seconds
-      if (frameCountRef.current % 90 === 0) {
-        const randomGesture = demoGestures[Math.floor(Math.random() * demoGestures.length)];
-        const confidence = 0.75 + Math.random() * 0.2; // 0.75-0.95
-        
-        const smoothedGesture = smootherRef.current.updateGesture(randomGesture, confidence);
-        
-        if (smoothedGesture && smoothedGesture !== lastRecognitionRef.current) {
-          setDetectedGesture(smoothedGesture);
-          setGestureDescription(demoDescriptions[smoothedGesture] || 'Unknown gesture');
-          lastRecognitionRef.current = smoothedGesture;
-          
-          // Add to history
-          setGestureHistory(prev => [smoothedGesture, ...prev.slice(0, 4)]);
-        }
-      }
-
-      // Calculate FPS
       if (frameCountRef.current % 30 === 0) {
         const elapsed = (Date.now() - startTimeRef.current) / 1000;
         const calculatedFps = frameCountRef.current / elapsed;
-        setFps(Math.min(calculatedFps, 30)); // Cap at 30 FPS for display
+        setFps(Math.min(calculatedFps, 30));
       }
-    }, 33); // ~30 FPS simulation
+    }, 33);
 
-    return () => clearInterval(interval);
+    return () => clearInterval(fpsInterval);
   }, [isModelLoaded]);
+
+  // Simulate hand detection in the region (for demo)
+  const simulateHandDetection = () => {
+    if (!detectedGesture) {
+      setHandDetected(true);
+      setStatusMessage('Hand detected! Make a gesture...');
+      
+      setTimeout(() => {
+        // Detect gesture after 1 second
+        detectionFrameCountRef.current = Math.floor(Math.random() * 30);
+        handleGestureDetection();
+      }, 1000);
+    }
+  };
 
   if (!permission?.granted) {
     return (
@@ -111,11 +205,39 @@ export const CameraComponent = () => {
           facing="front"
         />
         
+        {/* Detection Zone Overlay */}
+        <View style={styles.detectionZoneOverlay}>
+          {/* Detection Square */}
+          <View style={[
+            styles.detectionZone,
+            handDetected && styles.detectionZoneActive
+          ]}>
+            <Text style={styles.detectionZoneText}>
+              {handDetected ? '✓ Hand Detected' : 'Place Hand Here'}
+            </Text>
+          </View>
+        </View>
+        
         <View style={styles.overlay}>
           <View style={styles.statusBox}>
             <Text style={styles.fpsText}>FPS: {fps.toFixed(1)}</Text>
           </View>
+          
+          <View style={styles.instructionBox}>
+            <Text style={styles.instructionText}>{statusMessage}</Text>
+          </View>
         </View>
+        
+        {/* Tap to Signal Button - appears when model is loaded */}
+        <TouchableOpacity 
+          style={styles.signalButton}
+          onPress={simulateHandDetection}
+          disabled={detectedGesture !== ''}
+        >
+          <Text style={styles.signalButtonText}>
+            {detectedGesture ? 'Processing...' : 'Tap Here to Signal'}
+          </Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.resultsContainer}>
@@ -124,6 +246,9 @@ export const CameraComponent = () => {
           <View style={styles.gestureBox}>
             <Text style={styles.gestureName}>{detectedGesture}</Text>
             <Text style={styles.gestureDescription}>{gestureDescription}</Text>
+            {gestureConfidence > 0 && (
+              <Text style={styles.confidenceText}>Confidence: {(gestureConfidence * 100).toFixed(0)}%</Text>
+            )}
           </View>
         ) : (
           <Text style={styles.noGestureText}>No gesture detected</Text>
@@ -189,6 +314,71 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: 'bold',
   },
+  detectionZoneOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 50,
+  },
+  detectionZone: {
+    width: 200,
+    height: 200,
+    borderWidth: 3,
+    borderColor: '#FFC107',
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 193, 7, 0.1)',
+    zIndex: 60,
+  },
+  detectionZoneActive: {
+    borderColor: '#4CAF50',
+    backgroundColor: 'rgba(76, 175, 80, 0.2)',
+    borderWidth: 4,
+  },
+  detectionZoneText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    textShadowColor: '#000',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 3,
+  },
+  instructionBox: {
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 5,
+    marginTop: 8,
+    minWidth: 150,
+  },
+  instructionText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  signalButton: {
+    position: 'absolute',
+    bottom: 15,
+    right: 15,
+    backgroundColor: '#2196F3',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 25,
+    zIndex: 100,
+  },
+  signalButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
   resultsContainer: {
     flex: 0.45,
     backgroundColor: '#fff',
@@ -221,6 +411,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#558b2f',
     marginTop: 4,
+  },
+  confidenceText: {
+    fontSize: 11,
+    color: '#689f38',
+    marginTop: 6,
+    fontWeight: '600',
   },
   noGestureText: {
     fontSize: 14,
